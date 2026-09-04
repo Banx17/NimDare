@@ -37,9 +37,21 @@ function optional(key: string, fallback: string): string {
 export const config = {
   port: Number(optional("PORT", "3001")),
   nodeEnv: optional("NODE_ENV", "development"),
+  // ---- Database ----
+  // A MongoDB connection string is REQUIRED. If MONGO_URI is missing, the
+  // required() helper above fails fast with a clear message and the server
+  // stops — we never want to run without a database.
+  mongoUri: required("MONGO_URI"),
+  // ---- Auth ----
+  // Secret used to sign JWTs (see src/utils/jwt.ts). REQUIRED — if it's
+  // missing we fail fast rather than silently shipping unsigned tokens.
+  jwtSecret: required("JWT_SECRET"),
 } as const;
 
 // Log which environment we're running in (helps with debugging).
+// Note: we do NOT log the full MONGO_URI here because it may contain
+// credentials. We still load it (failing fast if missing) — we just don't
+// echo it back to the console.
 console.log(
-  `[config] Loaded — NODE_ENV=${config.nodeEnv}, PORT=${config.port}`
+  `[config] Loaded — NODE_ENV=${config.nodeEnv}, PORT=${config.port}, MONGO_URI=${config.mongoUri ? "set" : "missing"}`
 );
