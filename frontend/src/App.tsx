@@ -1,18 +1,16 @@
-// NimDare Mini App — wallet login flow (Stage 6).
+// NimDare Mini App — wallet login (Stage 6) + challenge views (Stage 7).
 //
-// This component owns two things:
-//   1. Connecting to Nimiq Pay (from the Stage 5 scaffold) — shows a boot
-//      screen until the provider is injected and consensus + block height are
-//      known.
-//   2. The wallet login flow — "Connect Wallet" runs the full round trip:
-//        listAccounts()  -> POST /api/auth/connect  (find-or-create user)
-//        sign(message)   -> POST /api/auth/verify  (signature check + JWT)
-//                          -> GET /api/me          (prove login works)
-//      The token sits in React state only (in-memory) — persistence across
-//      reloads is intentionally NOT done in this stage.
+// This component owns:
+//   1. Connecting to Nimiq Pay (Stage 5 scaffold) — boot screen until the
+//      provider is injected and consensus + block height are known.
+//   2. The wallet login flow (Stage 6) — listAccounts() -> sign(message) ->
+//      backend verify -> in-memory JWT + the /api/me proof.
+//   3. View switching (Stage 7) — the app shows either the challenge list
+//      (with a create-challenge form when logged in) or a challenge detail.
+//      Navigation is plain React state: "which challenge id is open?" — no
+//      router, on purpose (a router can be added later if it earns its keep).
 //
-// State is plain useState. No framework/store on purpose (Stage 5 kept the
-// template framework-free).
+// State is plain useState. No framework/store/schema library.
 
 import { useEffect, useState } from "react";
 import { init, type NimiqProvider } from "@nimiq/mini-app-sdk";
@@ -23,6 +21,10 @@ import {
   verifyLogin,
   type User,
 } from "./api";
+import { ChallengeList } from "./components/ChallengeList";
+import { ChallengeDetail } from "./components/ChallengeDetail";
+import { CreateChallengeForm } from "./components/CreateChallengeForm";
+import { shorten } from "./format";
 
 // ----- state types -----
 
@@ -49,6 +51,12 @@ type MeState =
   | { status: "ok"; user: User }
   | { status: "error"; message: string };
 
+// Which screen is shown. Simple state-based navigation: the detail view
+// stores the id of the challenge being viewed; the list view is the default.
+type View =
+  | { name: "list" }
+  | { name: "detail"; challengeId: string };
+
 // ----- login message -----
 
 // The message we ask the user's wallet to sign, then send to the backend for
@@ -71,6 +79,7 @@ export default function App() {
   const [provider, setProvider] = useState<NimiqProvider | null>(null);
   const [auth, setAuth] = useState<AuthState>({ status: "idle" });
   const [me, setMe] = useState<MeState>({ status: "idle" });
+  const [view, setView] = useState<View>({ name: "list" });
 
   // Boot: wait for Nimiq Pay to inject the provider, then probe the network.
   // (Stage 5 scaffold, kept as-is.)
@@ -107,9 +116,9 @@ export default function App() {
     };
   }, []);
 
-  // GET /api/me with the stored token. Purely visual proof that the round
-  // trip works: the user it returns is read fresh from MongoDB, not echoed
-  // from the login response.
+  // GET /api/me with the stored token. Compact proof that the round trip
+  // works: the user it returns is read fresh from MongoDB, not echoed from
+  // the login response.
   const refreshMe = async (token: string) => {
     setMe({ status: "loading" });
     try {
@@ -177,8 +186,7 @@ export default function App() {
       // f. Logged in. Token kept in memory for this session only.
       setAuth({ status: "done", token, user });
 
-      // g. Kick off the /api/me proof (non-blocking — the login card already
-      //    shows the user; this card updates when the server answers).
+      // g. Kick off the /api/me proof (non-blocking — updates the header).
       void refreshMe(token);
     } catch (err) {
       // Any step failed (dialog rejected, backend down, verification failed)
@@ -220,6 +228,7 @@ export default function App() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
       <div className="w-full max-w-sm space-y-4">
+        {/* Network status (Stage 5 scaffold). */}
         <div className="rounded-lg bg-white p-4 shadow-sm">
           <h1 className="text-xl font-semibold text-zinc-900">Nimiq connected</h1>
           <dl className="mt-4 space-y-2 text-sm">
@@ -239,87 +248,47 @@ export default function App() {
         </div>
 
         {auth.status === "done" ? (
-          <>
-            {/* Logged in — the identity the backend knows us as. */}
-            <div className="rounded-lg bg-white p-4 shadow-sm">
-              <h2 className="font-semibold text-zinc-900">Logged in</h2>
-              <dl className="mt-3 space-y-2 text-sm">
-                <div className="flex justify-between gap-4">
-                  <dt className="text-zinc-500">Username</dt>
-                  <dd className="truncate font-medium text-zinc-900">
-                    {auth.user.username}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-zinc-500">Wallet</dt>
-                  <dd className="truncate font-mono text-xs text-zinc-700">
-                    {auth.user.walletAddress}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-zinc-500">JWT</dt>
-                  <dd className="truncate font-mono text-xs text-zinc-500">
-                    {auth.token.slice(0, 20)}&hellip;
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-            {/* /api/me proof — fresh from MongoDB, not echoed from login. */}
-            <div className="rounded-lg bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold text-zinc-900">Who am I? (/api/me)</h2>
-                <button
-                  onClick={() => void refreshMe(auth.token)}
-                  disabled={me.status === "loading"}
-                  className="text-sm text-zinc-500 underline enabled:hover:text-zinc-900 disabled:opacity-50"
-                >
-                  Refresh
-                </button>
+          /* Logged in — compact identity + the /api/me proof. */
+          <div className="rounded-lg bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="font-semibold text-zinc-900">Logged in</h2>
+                <p className="truncate text-sm text-zinc-600">
+                  {auth.user.username}
+                  <span
+                    className="ml-2 font-mono text-xs text-zinc-400"
+                    title={auth.user.walletAddress}
+                  >
+                    {shorten(auth.user.walletAddress)}
+                  </span>
+                </p>
               </div>
-
-              {me.status === "loading" && (
-                <p className="mt-3 text-sm text-zinc-500">
-                  Fetching your profile from the backend&hellip;
-                </p>
-              )}
-
-              {me.status === "ok" && (
-                <dl className="mt-3 space-y-2 text-sm">
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-zinc-500">Username</dt>
-                    <dd className="truncate font-medium text-zinc-900">
-                      {me.user.username}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-zinc-500">Wallet</dt>
-                    <dd className="truncate font-mono text-xs text-zinc-700">
-                      {me.user.walletAddress}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-zinc-500">MongoDB _id</dt>
-                    <dd className="truncate font-mono text-xs text-zinc-500">
-                      {me.user._id}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-zinc-500">Created at</dt>
-                    <dd className="truncate font-mono text-xs text-zinc-500">
-                      {me.user.createdAt}
-                    </dd>
-                  </div>
-                </dl>
-              )}
-
-              {me.status === "error" && (
-                <p className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
-                  {me.message}
-                </p>
-              )}
+              <button
+                onClick={() => void refreshMe(auth.token)}
+                disabled={me.status === "loading"}
+                className="shrink-0 text-sm text-zinc-500 underline enabled:hover:text-zinc-900 disabled:opacity-50"
+              >
+                Who am I?
+              </button>
             </div>
-          </>
+
+            {me.status === "loading" && (
+              <p className="mt-2 text-sm text-zinc-500">
+                Fetching profile from MongoDB&hellip;
+              </p>
+            )}
+            {me.status === "ok" && (
+              <p className="mt-2 text-sm text-zinc-500">
+                Server profile:{" "}
+                <span className="font-mono text-xs" title={me.user._id}>
+                  {shorten(me.user._id, 32)}
+                </span>
+              </p>
+            )}
+            {me.status === "error" && (
+              <p className="mt-2 text-sm text-red-700">{me.message}</p>
+            )}
+          </div>
         ) : (
           /* Not logged in — the connect button + status. */
           <div className="rounded-lg bg-white p-4 shadow-sm">
@@ -346,6 +315,36 @@ export default function App() {
               {auth.status === "verifying" && "Verifying with the backend&hellip;"}
             </button>
           </div>
+        )}
+
+        {/* The current screen: challenge list (with create form) or detail. */}
+        {view.name === "detail" ? (
+          <ChallengeDetail
+            challengeId={view.challengeId}
+            token={auth.status === "done" ? auth.token : null}
+            userId={auth.status === "done" ? auth.user._id : null}
+            onBack={() => setView({ name: "list" })}
+            onDeleted={() => setView({ name: "list" })}
+          />
+        ) : (
+          <>
+            {/* Create-form — only when logged in. */}
+            {auth.status === "done" && (
+              <CreateChallengeForm
+                token={auth.token}
+                onCreated={(challenge) =>
+                  setView({ name: "detail", challengeId: challenge._id })
+                }
+              />
+            )}
+
+            {/* The list is public — visible logged out too. */}
+            <ChallengeList
+              onSelect={(challengeId) =>
+                setView({ name: "detail", challengeId })
+              }
+            />
+          </>
         )}
       </div>
     </div>

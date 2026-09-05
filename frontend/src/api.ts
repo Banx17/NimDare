@@ -1,4 +1,4 @@
-// NimDare frontend API client (Stage 6).
+// NimDare frontend API client (Stages 6-7).
 //
 // A small typed wrapper around fetch() for the backend REST API. Every
 // function returns the parsed JSON body on success and throws an Error whose
@@ -83,6 +83,12 @@ async function apiRequest<T>(
     );
   }
 
+  // Some endpoints (DELETE) answer 204 No Content on purpose — there is no
+  // JSON body to read, so return early instead of trying to parse nothing.
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
   // The backend always replies with JSON. If parsing fails, data stays null
   // and we fall back to reporting the HTTP status.
   let data: unknown = null;
@@ -137,4 +143,118 @@ export function verifyLogin(
 // echoed back from the login step, it is read fresh from the database.
 export function getMe(token: string): Promise<MeResponse> {
   return apiRequest<MeResponse>("/api/me", { token });
+}
+
+// ---- Challenge types (Stage 7) ----
+
+// The only statuses a solo challenge can be in (mirrors the backend model).
+export type ChallengeStatus = "draft" | "active" | "completed" | "failed";
+
+// Shape of a Challenge as returned by the backend.
+// NOTE: `creator` is a MongoDB ObjectId (serialized to a hex string) — the
+// list/detail endpoints do NOT populate the creator's username, so the UI
+// displays it as a short id (and can mark it "you" when it matches the
+// logged-in user).
+export interface Challenge {
+  _id: string;
+  title: string;
+  description: string;
+  creator: string;
+  type: "solo";
+  rules: string;
+  proofRequired: boolean;
+  nimAmount: number;
+  status: ChallengeStatus;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// The payload accepted by POST /api/challenges. Dates are sent as ISO
+// strings; the backend coerces them to Date.
+export interface CreateChallengeData {
+  title: string;
+  description: string;
+  rules: string;
+  nimAmount: number;
+  startDate: string;
+  endDate: string;
+  proofRequired?: boolean;
+}
+
+export interface ChallengeListResponse {
+  challenges: Challenge[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+// Optional filters for GET /api/challenges (status, creator, pagination).
+// Only the fields you actually set are sent as query params.
+export interface ChallengeListFilters {
+  status?: ChallengeStatus;
+  creator?: string;
+  page?: number;
+  limit?: number;
+}
+
+// ---- Challenge API functions ----
+
+// POST /api/challenges — create a solo challenge (requires auth).
+export function createChallenge(
+  token: string,
+  data: CreateChallengeData
+): Promise<{ challenge: Challenge }> {
+  return apiRequest<{ challenge: Challenge }>("/api/challenges", {
+    method: "POST",
+    body: data,
+    token,
+  });
+}
+
+// GET /api/challenges — list challenges (public), with optional filters and
+// pagination. Returns { challenges, total, page, limit, totalPages }.
+export function listChallenges(
+  filters: ChallengeListFilters = {}
+): Promise<ChallengeListResponse> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set("status", filters.status);
+  if (filters.creator) params.set("creator", filters.creator);
+  if (filters.page !== undefined) params.set("page", String(filters.page));
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+
+  const query = params.toString();
+  return apiRequest<ChallengeListResponse>(
+    `/api/challenges${query ? `?${query}` : ""}`
+  );
+}
+
+// GET /api/challenges/:id — view one challenge (public).
+export function getChallenge(id: string): Promise<{ challenge: Challenge }> {
+  return apiRequest<{ challenge: Challenge }>(`/api/challenges/${id}`);
+}
+
+// PATCH /api/challenges/:id/status — move a challenge to its next status
+// (requires auth + creator). Legit transitions only: the backend rejects
+// invalid ones with a clear 400.
+export function updateChallengeStatus(
+  token: string,
+  id: string,
+  status: ChallengeStatus
+): Promise<{ challenge: Challenge }> {
+  return apiRequest<{ challenge: Challenge }>(
+    `/api/challenges/${id}/status`,
+    { method: "PATCH", body: { status }, token }
+  );
+}
+
+// DELETE /api/challenges/:id — delete a DRAFT challenge (requires auth +
+// creator). The backend answers 204 on success.
+export function deleteChallenge(token: string, id: string): Promise<void> {
+  return apiRequest<void>(`/api/challenges/${id}`, {
+    method: "DELETE",
+    token,
+  });
 }
