@@ -21,7 +21,26 @@ const app = express();
 
 // cors() lets the frontend (running on a different origin/port during
 // development) make requests to this backend without browser errors.
-app.use(cors());
+//
+// The allowed origin is read from CORS_ORIGIN (config.corsOrigin) in
+// backend/.env — set it to EXACTLY the origin of the "Network URL" that Nimiq
+// Pay is loading the Mini App from (e.g. http://192.168.1.100:5173). That URL
+// changes whenever your machine's LAN IP changes, which is why we never
+// hardcode it here. "*" (the default) allows any origin for dev convenience.
+//
+// origin is `undefined` for requests without an Origin header (curl, server-
+// to-server) — those are always allowed. callback(null, false) means "deny":
+// the browser then blocks the request because no CORS header is sent.
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      const allowed = config.corsOrigin;
+      const isAllowed =
+        !origin || allowed === "*" || allowed === origin;
+      callback(null, isAllowed);
+    },
+  })
+);
 
 // express.json() parses incoming JSON request bodies so we can access
 // them later via req.body.

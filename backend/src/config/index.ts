@@ -46,6 +46,14 @@ export const config = {
   // Secret used to sign JWTs (see src/utils/jwt.ts). REQUIRED — if it's
   // missing we fail fast rather than silently shipping unsigned tokens.
   jwtSecret: required("JWT_SECRET"),
+  // ---- CORS ----
+  // The origin the browser (the Mini App inside Nimiq Pay) is loaded from.
+  // MUST match the "Network URL" Nimiq Pay is showing the app from, e.g.
+  // http://192.168.x.x:5173 — NOT localhost, because localhost on the phone
+  // is the phone itself. Defaults to "*" (allow any origin) so dev works out
+  // of the box even if the variable is forgotten; set it explicitly whenever
+  // you want to restrict who can call the API.
+  corsOrigin: optional("CORS_ORIGIN", "*"),
 } as const;
 
 // Log which environment we're running in (helps with debugging).
@@ -53,5 +61,5 @@ export const config = {
 // credentials. We still load it (failing fast if missing) — we just don't
 // echo it back to the console.
 console.log(
-  `[config] Loaded — NODE_ENV=${config.nodeEnv}, PORT=${config.port}, MONGO_URI=${config.mongoUri ? "set" : "missing"}`
+  `[config] Loaded — NODE_ENV=${config.nodeEnv}, PORT=${config.port}, MONGO_URI=${config.mongoUri ? "set" : "missing"}, CORS_ORIGIN=${config.corsOrigin}`
 );
