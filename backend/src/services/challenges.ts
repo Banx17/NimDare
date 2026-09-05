@@ -1,4 +1,4 @@
-// Challenge service (Stage 4).
+// Challenge service (Stages 4 + 8).
 //
 // Business logic for Challenge CRUD. Kept out of the controllers so handlers
 // stay thin and the logic is easy to unit test.
@@ -6,13 +6,16 @@
 // Only SOLO challenges are supported in the MVP — a challenge has exactly one
 // participant, its creator. There is deliberately NO join/participant logic.
 //
-// NOTE: proof submission and verification are a LATER stage (Stage 9). Here
-// "complete"/"fail" are simple status transitions the creator makes directly,
-// NOT verified outcomes.
+// NOTE (Stage 8): completion is now GATED. When a challenge has
+// `proofRequired: true`, moving it active -> completed requires at least one
+// 'approved' proof to exist first (see updateChallengeStatus below). This
+// closes the Stage 4 gap where the creator could mark a challenge completed
+// with zero evidence. 'active -> failed' needs no proof — that represents
+// "I didn't do it / I gave up", which doesn't require evidence.
 
 import { Types, HydratedDocument } from "mongoose";
 import { z } from "zod";
-import { Challenge, IChallenge } from "../models";
+import { Challenge, Proof, IChallenge } from "../models";
 
 // The actual shape of a Challenge document as returned by Mongoose queries
 // (has methods like .save(), .toJSON(), etc.). Using this type (instead of the
@@ -68,8 +71,9 @@ function validationMessage(err: z.ZodError): string {
 }
 
 // The statuses a challenge can be in, and the only transitions the creator may
-// perform in this stage. "complete"/"fail" are direct transitions — no proof
-// verification (Stage 9).
+// perform. 'active -> completed' carries an extra requirement — see the proof
+// gate in updateChallengeStatus. 'active -> failed' stays proof-free on
+// purpose: giving up or not doing it needs no evidence.
 const ALLOWED_TRANSITIONS: Record<IChallenge["status"], IChallenge["status"][]> = {
   draft: ["active"], // draft -> active
   active: ["completed", "failed"], // active -> completed | failed
@@ -82,7 +86,8 @@ const ALLOWED_TRANSITIONS: Record<IChallenge["status"], IChallenge["status"][]> 
 // ---------------------------------------------------------------------------
 // Reusable check so we don't repeat "is this user the creator?" in every
 // handler. An `ownerId` is a user id string from the JWT (`req.user.id`).
-function isCreator(challenge: IChallenge, ownerId: string): boolean {
+// Exported so the proofs service (same solo-challenge rule) can share it.
+export function isCreator(challenge: IChallenge, ownerId: string): boolean {
   return challenge.creator.toString() === ownerId;
 }
 
@@ -183,6 +188,15 @@ export async function getChallengeById(id: string): Promise<ChallengeDocument> {
 //   - Only the creator may change status (else ForbiddenError).
 //   - The new status must be a real status value (else ValidationError).
 //   - The transition must be allowed from the current status (else ValidationError).
+//   - COMPLETION GATE (Stage 8): when `proofRequired` is true, `active ->
+//     completed` additionally requires at least one 'approved' Proof for the
+//     challenge. This closes the Stage 4 accountability gap in which the
+//     creator could flip a challenge to completed with zero evidence. The
+//     proof itself is self-submitted and self-approved (solo MVP — see
+//     services/proofs.ts), but it is a real, recorded, timestamped act.
+//   - `active -> failed` explicitly does NOT require a proof, regardless of
+//     `proofRequired` — marking a challenge failed represents giving up, and
+//     giving up shouldn't need evidence.
 export async function updateChallengeStatus(
   id: string,
   requesterId: string,
@@ -210,6 +224,20 @@ export async function updateChallengeStatus(
       `Cannot move a challenge from '${challenge.status}' to '${newStatus}'. ` +
         `Allowed next statuses: ${allowed.length ? allowed.join(", ") : "none"}.`
     );
+  }
+
+  // Completion gate — see the comment at the top of this function.
+  if (newStatus === "completed" && challenge.proofRequired) {
+    const approvedProof = await Proof.exists({
+      challenge: challenge._id,
+      status: "approved",
+    });
+    if (!approvedProof) {
+      throw new ValidationError(
+        "Cannot complete: no approved proof submitted. This challenge requires " +
+          "proof of completion — submit a proof and approve it first."
+      );
+    }
   }
 
   challenge.status = newStatus as IChallenge["status"];

@@ -5,7 +5,9 @@
 //       2. Explicit non-solo `type` is rejected up front.
 //       3. Validation: missing fields, non-positive nimAmount, endDate <= startDate.
 //       4. Public list + get (creator filter, pagination).
-//       5. Status transitions: draft->active->completed (creator only).
+//       5. Status transitions: draft->active->completed (creator only). Since
+//          Stage 8, completing a proofRequired challenge needs an approved
+//          proof — verified here (blocked without, allowed with one).
 //       6. Invalid transition rejected (e.g. draft->completed, active->draft).
 //       7. Non-creator is forbidden from status updates and deletes.
 //       8. Only a DRAFT challenge can be deleted; active/completed cannot.
@@ -17,7 +19,7 @@
 
 import { connectDatabase } from "./config/database";
 import mongoose from "mongoose";
-import { User, Challenge, IChallenge } from "./models";
+import { User, Challenge, Proof, IChallenge } from "./models";
 import { connectWallet } from "./services/auth";
 import { signToken } from "./utils/jwt";
 import {
@@ -30,6 +32,7 @@ import {
   ForbiddenError,
   ValidationError,
 } from "./services/challenges";
+import { submitProof, verifyProof } from "./services/proofs";
 
 let pass = 0;
 let fail = 0;
@@ -130,8 +133,22 @@ async function verify() {
   // --- 5. status transitions: draft -> active -> completed ---
   const act = await updateChallengeStatus(ch._id.toString(), creatorId, "active");
   check("[5] draft -> active", act.status === "active", `status=${act.status}`);
+  // Stage 8 completion gate: `ch` was created without an explicit
+  // proofRequired, so it defaults to TRUE — completing therefore needs an
+  // approved proof first (submit + self-approve, exactly like the app will).
+  let e5 = false;
+  try {
+    await updateChallengeStatus(ch._id.toString(), creatorId, "completed");
+  } catch (ex) {
+    e5 = true;
+  }
+  check("[5] active -> completed blocked WITHOUT approved proof", e5, e5 ? "" : "completed succeeded without proof");
+  const proof = await submitProof(ch._id.toString(), creatorId, {
+    content: "Stage 8 gate: evidence of completion",
+  });
+  await verifyProof(proof._id.toString(), creatorId, "approved");
   const comp = await updateChallengeStatus(ch._id.toString(), creatorId, "completed");
-  check("[5] active -> completed", comp.status === "completed", `status=${comp.status}`);
+  check("[5] active -> completed (with approved proof)", comp.status === "completed", `status=${comp.status}`);
 
   // --- 6. invalid transitions rejected ---
   const ch2 = await createChallenge(creatorId, {
@@ -216,11 +233,15 @@ async function verify() {
   check("[9] missing challenge -> NotFound", e9 instanceof NotFoundError, String(e9));
 
   // --- cleanup ---
-  await Challenge.deleteMany({ _id: { $in: createdChallenges } });
+  const createdObjectIds = createdChallenges.map((id) => new mongoose.Types.ObjectId(id));
+  await Proof.deleteMany({ challenge: { $in: createdObjectIds } });
+  await Challenge.deleteMany({ _id: { $in: createdObjectIds } });
   await User.deleteMany({ _id: { $in: [creator._id, stranger._id] } });
-  const leftovers = await Challenge.countDocuments({ _id: { $in: createdChallenges } });
+  const leftovers = await Challenge.countDocuments({ _id: { $in: createdObjectIds } });
+  const leftoverProofs = await Proof.countDocuments({ challenge: { $in: createdObjectIds } });
   const leftoverUsers = await User.countDocuments({ _id: { $in: [creator._id, stranger._id] } });
   check("cleanup: no leftover challenges", leftovers === 0, `left=${leftovers}`);
+  check("cleanup: no leftover proofs", leftoverProofs === 0, `left=${leftoverProofs}`);
   check("cleanup: no leftover users", leftoverUsers === 0, `left=${leftoverUsers}`);
 
   await mongoose.disconnect();

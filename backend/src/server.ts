@@ -10,6 +10,7 @@ import { config } from "./config";
 import { connectDatabase } from "./config/database";
 import authRoutes from "./routes/auth";
 import challengeRoutes from "./routes/challenges";
+import proofRoutes from "./routes/proofs";
 import { requireAuth } from "./middleware/auth";
 import { meHandler } from "./controllers/authController";
 
@@ -61,6 +62,11 @@ app.use("/api/auth", authRoutes);
 
 // Challenge CRUD (solo challenges only for the MVP).
 app.use("/api/challenges", challengeRoutes);
+
+// Proof submission/listing (mounted under challenges) + proof self-verification
+// (mounted under /api/proofs) — see routes/proofs.ts.
+app.use("/api/challenges", proofRoutes);
+app.use("/api/proofs", proofRoutes);
 
 // Protected test route — requires a valid JWT and returns the current user
 // fresh from MongoDB (the auth middleware attaches req.user).
