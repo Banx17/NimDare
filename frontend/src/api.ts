@@ -1,4 +1,4 @@
-// NimDare frontend API client (Stages 6-7).
+// NimDare frontend API client (Stages 6-7 + proof calls from Stage 9).
 //
 // A small typed wrapper around fetch() for the backend REST API. Every
 // function returns the parsed JSON body on success and throws an Error whose
@@ -255,6 +255,74 @@ export function updateChallengeStatus(
 export function deleteChallenge(token: string, id: string): Promise<void> {
   return apiRequest<void>(`/api/challenges/${id}`, {
     method: "DELETE",
+    token,
+  });
+}
+
+// ---- Proof types (Stage 9) ----
+
+// The lifecycle of a submitted proof. "pending" is the unverified state; only
+// the challenge creator can flip it, and only once (self-verification — the
+// UI shows an honest note about that limitation).
+export type ProofStatus = "pending" | "approved" | "rejected";
+
+// Shape of a Proof as returned by the backend.
+export interface Proof {
+  _id: string;
+  challenge: string; // the Challenge _id this proof belongs to
+  user: string; // the _id of the user who submitted it (the creator)
+  content: string;
+  images?: string[]; // string URLs only — no file upload
+  status: ProofStatus;
+  verifiedAt?: string; // set once the creator approved/rejected the proof
+  createdAt: string;
+  updatedAt: string;
+}
+
+// The payload accepted by POST /api/challenges/:challengeId/proofs.
+export interface SubmitProofData {
+  content: string;
+  images?: string[];
+}
+
+// The two decisions a creator can make on a pending proof.
+export type VerifyDecision = "approved" | "rejected";
+
+// ---- Proof API functions ----
+
+// POST /api/challenges/:challengeId/proofs — the creator submits proof for an
+// ACTIVE challenge (requires auth). The backend rejects non-creators, and
+// challenges that are draft/completed/failed, with a clear message.
+export function submitProof(
+  token: string,
+  challengeId: string,
+  data: SubmitProofData
+): Promise<{ proof: Proof }> {
+  return apiRequest<{ proof: Proof }>(
+    `/api/challenges/${challengeId}/proofs`,
+    { method: "POST", body: data, token }
+  );
+}
+
+// GET /api/challenges/:challengeId/proofs — public, newest first.
+export function listProofs(
+  challengeId: string
+): Promise<{ proofs: Proof[] }> {
+  return apiRequest<{ proofs: Proof[] }>(
+    `/api/challenges/${challengeId}/proofs`
+  );
+}
+
+// POST /api/proofs/:proofId/verify — the creator approves/rejects a PENDING
+// proof (requires auth). A proof can be verified only once.
+export function verifyProof(
+  token: string,
+  proofId: string,
+  decision: VerifyDecision
+): Promise<{ proof: Proof }> {
+  return apiRequest<{ proof: Proof }>(`/api/proofs/${proofId}/verify`, {
+    method: "POST",
+    body: { decision },
     token,
   });
 }
